@@ -40,7 +40,7 @@ export interface ProofCheck {
 }
 
 export interface ProofDiff {
-  kind: 'same' | 'added' | 'removed' | 'changed';
+  kind: 'same' | 'added' | 'removed' | 'changed' | 'moved';
   label: string;
   before: string;
   after: string;

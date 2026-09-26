@@ -1,5 +1,5 @@
 import { redraw } from 'mithril';
-import type { ProofCheck, ProofDocument, ProofStep, ProofVersion } from './types';
+import type { ProofCheck, ProofDiff, ProofDocument, ProofStep, ProofVersion } from './types';
 
 const STORAGE_KEY = 'sologsb-1014-proof-workspace-v1';
 const uid = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
@@ -20,9 +20,9 @@ function sampleSteps(): ProofStep[] {
 function issueSteps(): ProofStep[] {
   return [
     { id: 'i1', type: 'premise', statement: '$n$ 是正整数', rule: '前提', references: [], note: '', counterexample: '', alternative: '' },
-    { id: 'i2', type: 'derivation', statement: '$P(1)$ 成立', rule: '前提', references: ['i1'], note: '归纳基例。', counterexample: '', alternative: '' },
+    { id: 'i2', type: 'derivation', statement: '$P(1)$ 成立', rule: '前提', references: [], note: '归纳基例，但漏填了依据。', counterexample: '', alternative: '' },
     { id: 'i3', type: 'derivation', statement: '若 $P(k)$ 成立，则 $P(k+1)$ 也成立', rule: '数学归纳', references: ['missing-step'], note: '这里故意保留一个失效引用，用于演示检查。', counterexample: '', alternative: '' },
-    { id: 'i4', type: 'goal', statement: '$P(n)$ 对所有正整数 $n$ 成立', rule: '结论', references: ['i3'], note: '尚未补齐归纳假设。', counterexample: '', alternative: '' },
+    { id: 'i4', type: 'goal', statement: '$P(n)$ 对所有整数 $n$ 成立', rule: '结论', references: ['i3'], note: '结论写成了“整数”，与证明目标“正整数”对不上。', counterexample: '', alternative: '' },
   ];
 }
 
@@ -242,9 +242,15 @@ function stripLatexCommands(text: string): string {
   return text.replace(/\\[A-Za-z]+/g, ' ').replace(/[{}_^]/g, ' ');
 }
 
+function normalizeFormula(text: string): string {
+  // 用于结论与目标的语义比对：去掉 $、分组括号与 LaTeX 间距命令后再忽略空白
+  return text.replace(/[${}]/g, '').replace(/\\[,;:!]/g, '').replace(/\s+/g, '');
+}
+
 export function validate(document: ProofDocument): ProofCheck[] {
   const checks: ProofCheck[] = [];
   const ids = new Set(document.steps.map((step) => step.id));
+  const indexOf = new Map(document.steps.map((step, index) => [step.id, index]));
   const symbolKeys = new Set(Object.keys(document.symbols));
   const ignored = new Set(['a', 'A', 'b', 'B', 'n', 'k', 'P', 'Q', 'R', 'x', 'y', 'to', 'text', 'frac', 'sqrt']);
 
@@ -255,9 +261,18 @@ export function validate(document: ProofDocument): ProofCheck[] {
       checks.push({ id: `symbol-${step.id}`, severity: 'warning', title: '发现未定义符号', detail: `步骤 ${index + 1} 使用了：${unknown.join('、')}`, stepId: step.id });
     }
 
+    if (step.type === 'derivation' && step.references.length === 0) {
+      checks.push({ id: `no-basis-${step.id}`, severity: 'error', title: '推导未填写依据', detail: `步骤 ${index + 1} 是推导步骤，却没有引用任何前置步骤作为依据。`, stepId: step.id });
+    }
+
     step.references.forEach((reference) => {
       if (!ids.has(reference)) {
         checks.push({ id: `missing-${step.id}-${reference}`, severity: 'error', title: '引用步骤不存在', detail: `步骤 ${index + 1} 引用了已删除的步骤 ${reference}`, stepId: step.id });
+        return;
+      }
+      const referenceIndex = indexOf.get(reference)!;
+      if (referenceIndex > index) {
+        checks.push({ id: `forward-${step.id}-${reference}`, severity: 'error', title: '引用了靠后的步骤', detail: `步骤 ${index + 1} 引用了步骤 ${referenceIndex + 1}，依据必须出现在当前步骤之前。`, stepId: step.id });
       }
     });
   });
@@ -286,8 +301,29 @@ export function validate(document: ProofDocument): ProofCheck[] {
   const goalStep = document.steps.find((step) => step.type === 'goal' && step.rule === '结论');
   if (!goalStep) {
     checks.push({ id: 'goal-missing', severity: 'error', title: '目标未被证明', detail: '请添加“结论”类型的最终步骤。' });
-  } else if (goalStep.references.length === 0) {
-    checks.push({ id: 'goal-unlinked', severity: 'warning', title: '结论尚无推导支撑', detail: '最终步骤没有引用任何前置步骤。', stepId: goalStep.id });
+  } else {
+    if (goalStep.references.length === 0) {
+      checks.push({ id: 'goal-unlinked', severity: 'warning', title: '结论尚无推导支撑', detail: '最终步骤没有引用任何前置步骤。', stepId: goalStep.id });
+    } else {
+      // 从结论沿引用链回溯，检查能否回到至少一个前提
+      const reachable = new Set<string>();
+      const stack = [...goalStep.references];
+      while (stack.length) {
+        const id = stack.pop()!;
+        if (reachable.has(id)) continue;
+        reachable.add(id);
+        (graph.get(id) ?? []).forEach((previous) => stack.push(previous));
+      }
+      const hasPremiseRoot = document.steps.some((step) => step.type === 'premise' && reachable.has(step.id));
+      if (!hasPremiseRoot) {
+        checks.push({ id: 'goal-detached', severity: 'error', title: '结论回不到前提', detail: '从结论沿依据链回溯不到任何前提，推导链与出发点断开。', stepId: goalStep.id });
+      }
+    }
+
+    // 结论式与证明目标逐字比对：即使依据链完整，也要单独提出
+    if (normalizeFormula(goalStep.statement) !== normalizeFormula(document.goal)) {
+      checks.push({ id: 'goal-mismatch', severity: 'error', title: '结论与证明目标不一致', detail: `结论步骤写作「${goalStep.statement.replace(/\$/g, '')}」，证明目标是「${document.goal.replace(/\$/g, '')}」。`, stepId: goalStep.id });
+    }
   }
 
   if (!checks.some((check) => check.severity === 'error')) {
@@ -296,14 +332,82 @@ export function validate(document: ProofDocument): ProofCheck[] {
   return checks;
 }
 
-export function compareVersion(document: ProofDocument, version: ProofVersion) {
-  const result = [];
-  const size = Math.max(document.steps.length, version.steps.length);
-  for (let index = 0; index < size; index += 1) {
-    const before = version.steps[index]?.statement ?? '';
-    const after = document.steps[index]?.statement ?? '';
-    const kind = !before ? 'added' : !after ? 'removed' : before === after ? 'same' : 'changed';
-    result.push({ kind, label: `步骤 ${index + 1}`, before, after } as const);
+function stepSignature(step: ProofStep): string {
+  return JSON.stringify([step.type, step.statement, step.rule, step.references, step.note, step.counterexample, step.alternative]);
+}
+
+// 求两个步骤序列（仅含共有步骤）的最长公共子序列，其中的步骤视为相对顺序未变。
+// 这样在中间插入或删除一步时，其余步骤只会平移、不会被误报为挪动。
+function longestCommonSubsequence(before: string[], after: string[]): Set<string> {
+  const rows = before.length;
+  const cols = after.length;
+  const table: number[][] = Array.from({ length: rows + 1 }, () => new Array<number>(cols + 1).fill(0));
+  for (let i = rows - 1; i >= 0; i -= 1) {
+    for (let j = cols - 1; j >= 0; j -= 1) {
+      table[i][j] = before[i] === after[j]
+        ? table[i + 1][j + 1] + 1
+        : Math.max(table[i + 1][j], table[i][j + 1]);
+    }
+  }
+  const kept = new Set<string>();
+  let i = 0;
+  let j = 0;
+  while (i < rows && j < cols) {
+    if (before[i] === after[j]) {
+      kept.add(before[i]);
+      i += 1;
+      j += 1;
+    } else if (table[i + 1][j] >= table[i][j + 1]) {
+      i += 1;
+    } else {
+      j += 1;
+    }
+  }
+  return kept;
+}
+
+export function compareVersion(document: ProofDocument, version: ProofVersion): ProofDiff[] {
+  const result: ProofDiff[] = [];
+  const beforeSteps = version.steps;
+  const afterSteps = document.steps;
+  const beforeById = new Map(beforeSteps.map((step, index) => [step.id, { step, index }]));
+  const afterById = new Map(afterSteps.map((step, index) => [step.id, { step, index }]));
+
+  const commonBefore = beforeSteps.filter((step) => afterById.has(step.id)).map((step) => step.id);
+  const commonAfter = afterSteps.filter((step) => beforeById.has(step.id)).map((step) => step.id);
+  const stable = longestCommonSubsequence(commonBefore, commonAfter);
+  const movedIds = new Set(commonAfter.filter((id) => !stable.has(id)));
+
+  // 去掉的步骤单独成组，按旧版本顺序列出
+  beforeSteps.forEach((step, index) => {
+    if (!afterById.has(step.id)) {
+      result.push({ kind: 'removed', label: `步骤 ${index + 1}`, before: step.statement, after: '' });
+    }
+  });
+
+  afterSteps.forEach((step, index) => {
+    const previous = beforeById.get(step.id);
+    if (!previous) {
+      result.push({ kind: 'added', label: `步骤 ${index + 1}`, before: '', after: step.statement });
+      return;
+    }
+    const moved = movedIds.has(step.id);
+    const label = moved ? `步骤 ${previous.index + 1} → ${index + 1}` : `步骤 ${index + 1}`;
+    if (stepSignature(previous.step) !== stepSignature(step)) {
+      // 命题文字没变但规则/引用等变了，在右侧补一条提示，避免看起来像未改动
+      const afterText = previous.step.statement === step.statement
+        ? `${step.statement}（规则或引用有调整）`
+        : step.statement;
+      result.push({ kind: 'changed', label, before: previous.step.statement, after: afterText });
+    } else if (moved) {
+      result.push({ kind: 'moved', label, before: previous.step.statement, after: step.statement });
+    } else {
+      result.push({ kind: 'same', label: `步骤 ${index + 1}`, before: previous.step.statement, after: step.statement });
+    }
+  });
+
+  if (version.goal !== document.goal) {
+    result.push({ kind: 'changed', label: '证明目标', before: version.goal, after: document.goal });
   }
   return result;
 }

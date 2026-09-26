@@ -198,6 +198,9 @@ kbd { padding: 2px 5px; border: 1px solid #c8d1da; border-bottom-width: 2px; bor
 .diff-row.is-removed span:nth-child(2) { background: #fff0f2; }
 .diff-row.is-changed span:nth-child(2) { background: #fff8e8; }
 .diff-row.is-changed span:nth-child(3) { background: #eef8f3; }
+.diff-row.is-moved span:nth-child(2),
+.diff-row.is-moved span:nth-child(3) { background: #eef4fb; }
+.diff-row.is-same { color: #8a94a3; }
 .diff-label { color: #657385; background: #fafbfc; }
 .toast-notification { position: fixed; right: 24px; bottom: 24px; z-index: 80; padding: 11px 16px; border-radius: 9px; color: #fff; background: #173f60; box-shadow: 0 10px 30px rgba(17,47,70,.25); font-size: 12px; }
 

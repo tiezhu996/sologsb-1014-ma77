@@ -363,6 +363,7 @@ export class ProofApp implements Component {
           m('div.diff-summary', [
             m('span.tag.is-danger', `删除 ${diff.filter((item) => item.kind === 'removed').length}`),
             m('span.tag.is-success', `新增 ${diff.filter((item) => item.kind === 'added').length}`),
+            m('span.tag.is-info', `挪动 ${diff.filter((item) => item.kind === 'moved').length}`),
             m('span.tag.is-warning', `修改 ${diff.filter((item) => item.kind === 'changed').length}`),
             m('span.tag.is-light', `未变 ${diff.filter((item) => item.kind === 'same').length}`),
           ]),
