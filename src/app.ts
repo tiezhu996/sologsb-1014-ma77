@@ -199,7 +199,7 @@ export class ProofApp implements Component {
             m('div.check-summary-bars', [
               m('span', { style: { width: `${Math.max(8, 100 - errors * 24 - warnings * 12)}%` } }),
             ]),
-            m('p', errors ? '修正错误后再保存为定稿。' : warnings ? '结构有效，仍有待核对项。' : '当前结构与引用关系完整。'),
+            m('p', errors ? '修正错误后再保存为定稿。' : warnings ? '依据链有效，仍有待核对项。' : '依据链完整，结论与目标一致。'),
           ]),
         ]),
         m('section.editor-column', [
@@ -363,6 +363,7 @@ export class ProofApp implements Component {
           m('div.diff-summary', [
             m('span.tag.is-danger', `删除 ${diff.filter((item) => item.kind === 'removed').length}`),
             m('span.tag.is-success', `新增 ${diff.filter((item) => item.kind === 'added').length}`),
+            m('span.tag.is-info', `挪动 ${diff.filter((item) => item.kind === 'moved').length}`),
             m('span.tag.is-warning', `修改 ${diff.filter((item) => item.kind === 'changed').length}`),
             m('span.tag.is-light', `未变 ${diff.filter((item) => item.kind === 'same').length}`),
           ]),
